@@ -1,0 +1,138 @@
+services:
+
+  # ── Databases ────────────────────────────────────────────────────────────────
+
+  product-db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: product_db
+      POSTGRES_USER: gila
+      POSTGRES_PASSWORD: gila123
+    ports:
+      - "5433:5432"
+    volumes:
+      - product_db_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U gila -d product_db"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  order-db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: order_db
+      POSTGRES_USER: gila
+      POSTGRES_PASSWORD: gila123
+    ports:
+      - "5434:5432"
+    volumes:
+      - order_db_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U gila -d order_db"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  mongodb:
+    image: mongo:7-jammy
+    restart: unless-stopped
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongo_data:/data/db
+    healthcheck:
+      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ── Microservices ─────────────────────────────────────────────────────────────
+
+  product-service:
+    build:
+      context: ./backend-microservices
+      dockerfile: Dockerfile
+      target: product-service
+    restart: unless-stopped
+    ports:
+      - "8081:8081"
+    environment:
+      SPRING_DATASOURCE_URL: jdbc:postgresql://product-db:5432/product_db
+      SPRING_DATASOURCE_USERNAME: gila
+      SPRING_DATASOURCE_PASSWORD: gila123
+      SPRING_MONGODB_URI: mongodb://mongodb:27017/ecommerce_logs
+    depends_on:
+      product-db:
+        condition: service_healthy
+      mongodb:
+        condition: service_healthy
+
+  order-service:
+    build:
+      context: ./backend-microservices
+      dockerfile: Dockerfile
+      target: order-service
+    restart: unless-stopped
+    ports:
+      - "8082:8082"
+    environment:
+      SPRING_DATASOURCE_URL: jdbc:postgresql://order-db:5432/order_db
+      SPRING_DATASOURCE_USERNAME: gila
+      SPRING_DATASOURCE_PASSWORD: gila123
+      PRODUCT_SERVICE_URL: http://product-service:8081
+    depends_on:
+      order-db:
+        condition: service_healthy
+      product-service:
+        condition: service_started
+
+  payment-service:
+    build:
+      context: ./backend-microservices
+      dockerfile: Dockerfile
+      target: payment-service
+    restart: unless-stopped
+    ports:
+      - "8083:8083"
+    environment:
+      ORDER_SERVICE_URL: http://order-service:8082
+    depends_on:
+      order-service:
+        condition: service_started
+
+  api-gateway:
+    build:
+      context: ./backend-microservices
+      dockerfile: Dockerfile
+      target: api-gateway
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    environment:
+      PRODUCT_SERVICE_URL: http://product-service:8081
+      ORDER_SERVICE_URL: http://order-service:8082
+      PAYMENT_SERVICE_URL: http://payment-service:8083
+    depends_on:
+      - product-service
+      - order-service
+      - payment-service
+
+  # ── Frontend ───────────────────────────────────────────────────────────────
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    ports:
+      - "80:80"
+    depends_on:
+      - api-gateway
+
+volumes:
+  product_db_data:
+  order_db_data:
+  mongo_data:
